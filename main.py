@@ -50,17 +50,25 @@ def call_function(function_call_part, verbose=False):
     )
 
 def main():
-    if sys.argv[1] is not None:
-        user_prompt = sys.argv[1]
-    else:
-        return 1
-    
     #if --verbose is passed set bool verbose to True
     verbose = "--verbose" in sys.argv
     
-    messages = [
-        types.Content(role="user", parts=[types.Part(text=user_prompt)])
-    ]
+    # Initialize conversation history
+    messages = []
+    
+    # Check if initial prompt is provided via command line
+    if len(sys.argv) > 1 and sys.argv[1] not in ["--verbose"]:
+        initial_prompt = sys.argv[1]
+        messages.append(types.Content(role="user", parts=[types.Part(text=initial_prompt)]))
+        print(f"Initial prompt: {initial_prompt}")
+    else:
+        # Start with interactive mode
+        print("AI Agent Tool - Interactive Mode")
+        print("Type '/q' to quit")
+        user_input = input("Enter your prompt: ")
+        if user_input.strip() == "/q":
+            return 0
+        messages.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
 
     system_prompt = """
 You are an advanced AI coding agent specialized in Python development and file system operations. Your primary goal is to help users accomplish coding tasks efficiently and accurately within a secure, sandboxed environment.
@@ -99,6 +107,7 @@ Remember: You're not just a code executor, but a thoughtful development partner 
 Read the code base carefully, ALWAYS plan your approach, and execute with precision.
 Writing code replaces existing files, so ensure you understand the impact of your changes and always rewrite the entire content of a file when making changes.
 After you make changes, explain the changes you made and why they were necessary.
+Always read the codebase first.
 """
 
     schema_get_files_info = types.FunctionDeclaration(
@@ -172,49 +181,69 @@ After you make changes, explain the changes you made and why they were necessary
 
     client = genai.Client(api_key=api_key)
     
-    max_iterations = 20
-    iteration = 0
-    
-    while iteration < max_iterations:
-        iteration += 1
+    # Main conversation loop
+    while True:
+        max_tool_calls = 20
+        tool_call_count = 0
         
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-001", 
-            contents=messages,
-            config = types.GenerateContentConfig(
-                tools= [available_functions], 
-                system_instruction=system_prompt
+        # Process current conversation until tool limit or completion
+        while tool_call_count < max_tool_calls:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-preview-05-20", 
+                contents=messages,
+                config = types.GenerateContentConfig(
+                    tools= [available_functions], 
+                    system_instruction=system_prompt
+                )
             )
-        )
+            
+            # Add candidate responses to messages
+            for candidate in response.candidates:
+                messages.append(types.Content(role="model", parts=candidate.content.parts))
+            
+            function_called = False
+            
+            if response.function_calls is not None and len(response.function_calls) != 0:
+                function_called = True
+                for call in response.function_calls:
+                    tool_call_count += 1
+                    function_response = call_function(call, verbose)
+                    if function_response.parts[0].function_response.response is None:
+                        print(f"Error: Function {call.name} returned no response.")
+                        sys.exit(1)
+                    if verbose:
+                        print(f"-> {function_response.parts[0].function_response.response}")
+                    
+                    # Add function response to messages
+                    messages.append(function_response)
+            
+            # If no function was called, print final response and wait for next input
+            if not function_called:
+                print(response.text)
+                break
         
-        # Add candidate responses to messages
-        for candidate in response.candidates:
-            messages.append(types.Content(role="model", parts=candidate.content.parts))
+        # If we hit the tool call limit, inform user and continue
+        if tool_call_count >= max_tool_calls:
+            print(f"\n[Reached {max_tool_calls} tool calls limit. Conversation history preserved.]")
         
-        function_called = False
+        # Get next user input
+        print("\nEnter your next prompt (or '/q' to quit):")
+        user_input = input("> ")
         
-        if response.function_calls is not None and len(response.function_calls) != 0:
-            function_called = True
-            for call in response.function_calls:
-                function_response = call_function(call, verbose)
-                if function_response.parts[0].function_response.response is None:
-                    print(f"Error: Function {call.name} returned no response.")
-                    sys.exit(1)
-                if verbose:
-                    print(f"-> {function_response.parts[0].function_response.response}")
-                
-                # Add function response to messages
-                messages.append(function_response)
-        
-        # If no function was called, print final response and break
-        if not function_called:
-            print(response.text)
+        # Check for quit command
+        if user_input.strip() == "/q":
+            print("Goodbye!")
             break
-
-    if verbose:
-        print(f"User prompt: {user_prompt}")
-        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+        
+        # Add new user input to conversation
+        messages.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
+        
+        if verbose:
+            print(f"Tool calls used in last session: {tool_call_count}")
+            if 'response' in locals():
+                print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+                print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+    
     return 0
 
 if __name__ == "__main__":
