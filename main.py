@@ -18,7 +18,7 @@ def call_function(function_call_part, verbose=False):
         print(f"Calling function: {function_call_part.name}({function_call_part.args})")
     else:
         print(f" - Calling function: {function_call_part.name}")
-    working_directory = "./calculator"
+    working_directory = "."
     match function_call_part.name:
         case "get_files_info":
             kwargs = {"directory": function_call_part.args.get("directory")} if function_call_part.args else {}
